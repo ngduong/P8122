@@ -1,0 +1,274 @@
+---
+title: "Homework 4"
+author: "Ngoc Duong"
+date: "12/5/2020"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(personalized)
+library(tableone)
+library(MatchIt)
+library(optmatch)
+library(texreg)
+library("MatchIt")
+library("lmtest")
+library("boot")
+library(survey)
+```
+
+## Question 1
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+#import data
+data = read.table("gardasil.dat.txt", header = TRUE) %>% janitor::clean_names() %>% 
+  mutate(across(c("age_group", "race", "med_assist", "insurance_type", "practice_type", "location", "location_type"), as.factor))
+#0 pediatrics #1 family practice  #2 OB-GYN
+
+#exclude the outcome
+data_x = data %>% dplyr::select(-completed, -shots)
+vars <- colnames(data)[! colnames(data) %in% c('completed', 'practice_type', 'shots')]
+
+## Construct a table
+tab1 <- CreateTableOne(vars = vars, strata = "practice_type", data = data_x, test = FALSE)
+print(tab1, smd = TRUE)
+```
+
+We have 1413 subjects in the data, among whom 515 report attending a prediatric practice, 365 attending a general practice, and 533 attending an ob-gyn clinic. 
+
+Some quick observations from the descriptives above: the mean age for the pediatric clinic group is 14.92, while that for the general practice is 19.46, and 21.43 years old for the ob-gyn clinic. Insurance type 0 has the same distribution across 3 clinic types as medical assistance, suggesting women who are on medical assistance are also on insurance type 0. Finally, women living in location 2 and 3 in this sample exclusively go to ob-gyn clinic.
+
+## Question 2
+
+* The protocol for the RCT:
+
+(i) Control arm: patients attending pediatrics clinic and family medicine practice are grouped as one control arm 
+
+Treatment arm: patients attending ob-gyn clinic
+
+The question of interest is whether practice type affects rate of vaccine completion, so the arms should be by practice type. There are 3 practice types in the sample, and I decide to group pediatric and general practice to preserve the sample size and power. Otherwise, I might need to exclude pediatric clinic from the analytic sample (515 subjects). As a trade-off, there could be bias if we want to compare the average completion rate between ob-gyn and general practice, but we can also propose to compare between ob-gyn practice and non-ob-gyn practice in this case.
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+#group practice_type to 2 levels
+data_x = data %>% mutate(practicetype.bin = as.factor(ifelse(practice_type == 0 | practice_type == 1, 0, 1)))
+```
+
+* Cross-tab between 4 locations and treatment
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+table(data_x$practicetype.bin,data_x$location) #probabilisitc assumption violation
+```
+
+* Cross-tab between age and treatment
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+table(data_x$practicetype.bin,data_x$age)
+```
+
+(ii) Eligibility criteria based on levels of baseline characteristics
+
+We want to ensure probabilistic assumption for the assignment. 
+
+We can see from the table above that none of the participants in location 2 and 3 reported going to an ob-gyn clinic, so I decided to limit the eligibility criteria to only participants in location 1 and 4, because otherwise, among the participants in location 2 and 3, the probabilistic assumption is violated.
+
+We can also see that too few participants 11-14 years of age go to ob-gyn clinic (around 1 to 6); therefore, I decide to limit eligibility to participants at least 15 years old to increase overlap, although this will eliminate some amount of participants who go to pediatric clinic.
+
+Although we have female patients who are above a certain age (21) do not go to pediatric clinic anymore, since we have grouped pediatric and family practice as one control arm, having patients older than 21 should not violate the probabilistic assumption.
+
+* Some other considrations about the baseline covariates:
+
+Age group and location type are collapsed version of age and location (which may result in loss of information and might also increase bias), so I exclude these two variables.
+
+As noted before, medical assistance fully overlaps with insurance type 0; therefore, I don't consider this covariate.
+
+## Question 3
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+#Q3 -- exclude subjects that are ineligible
+x_new = data_x %>% filter(location %in% c(1,4), age >= 15) %>% mutate(location = factor(location, levels = c(1,4)))
+```
+
+We have excluded `r 1413 - nrow(x_new)` subjects. The remaining number of subjects is `r nrow(x_new)`
+
+**Descriptive statistics of analytic sample**
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+#descriptive statistics
+vars <- colnames(data)[! colnames(data) %in% c('completed', 'practicetype.bin', 'shots', 'practice_type', 'med_assist', 'age_group', 'location_type')]
+
+## Construct a table
+tab1.new<- CreateTableOne(vars = vars, strata = "practicetype.bin", data = x_new, test = FALSE)
+print(tab1.new, smd = TRUE)
+```
+
+Compared with the study sample, the analytic sample has fewer observations (617 in the control group, and 274 in the treatment group). 
+
+We have more balanced covariates between the two arms for all covariates of interest (the SMDs decreased after restricting sample by eligibility). Location seems to be quite balanced (SMD < 0.2). The proportion of categorical covariates like race and insurance type might change a bit (after combibing pediatric and general practice), and age also changes a little (somewhere in the middle of pediatric and general practice mean ages).
+
+## Question 4
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+#Q4 -estimate propensity score in analytic sample
+ps.model<-glm(practicetype.bin~ age + I(age^2) + age + race + insurance_type + location, data = x_new, family = binomial)
+summary(ps.model)
+
+ps <- predict(ps.model, type="response")
+
+prop.func <- function(x, trt)
+{
+  # fit propensity score model
+  propens.model <- glm(trt~age + I(age^2) + age + race + insurance_type + location, data = x, family = binomial)
+  pi.x <- predict(propens.model, type = "response")
+  pi.x
+}
+
+#check.overlap(x = x_new,
+#              trt = x_new$practicetype.bin,
+#              propensity.func = prop.func)
+check.overlap(x = x_new,
+              trt = x_new$practicetype.bin,
+              type = "both",
+              propensity.func = prop.func)
+```
+
+We observe that even after restricting eligibility criteria, there is still some subjects in treatment group that has no overlap with the control group. We later use matching to find a control with the nearest propensity score in some specified distance to these treated units. When we do this, depending on the caliper (if we decide to use it), (some of) these treated units might be excluded.
+
+**Intepret the results of PS model**
+
+Based on this propensity score model (regression output above), we see age and its quadratic term are highly associated with the propensity for being in the treated group. Specifically, the estimate coefficient for age is positive and has relatively large magnitude, which suggests the older the subjects, the more likely they go to ob-gyn clinic. Similarly, women with insurance type 1 and 2 are more likely to go to ob-gyn clinic compared to those with insurance type 0 (or who we saw were the subjects who need medical assistance). Finally, women in location 4 are more likely to be in the treatment group compared to those in location 1 as suggested by this PS model.
+
+## Question 5
+
+**Optimal matching**
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+#Q5 - Use matching to improve covariate balance
+#optimal
+psmatch.opt <- matchit(practicetype.bin ~ age + I(age^2) + race + insurance_type + location, 
+                    distance="logit", method = "optimal",
+                    discard = "control", data = x_new)
+
+# 2. Check balance
+summary(psmatch.opt, standardize=TRUE)
+```
+
+**Nearest-neighbor matching with caliper**
+
+```{r echo = FALSE, message = FALSE, warning = FALSE, fig.align = "center"}
+#nearest with caliper
+psmatch.cal <- matchit(practicetype.bin ~ age + I(age^2) + race + insurance_type + location, 
+                    distance="logit", method = "nearest", caliper = 0.4,
+                    discard = "control", data = x_new)
+
+# 2. Check balance
+summary(psmatch.cal, standardize=TRUE)
+plot(psmatch.cal)
+plot(psmatch.cal, type="hist")
+```
+
+* Process:
+
+I specified the model for propensity score like in part 4. I used distance measured from the logit function of the propensity score to account for the non-linearity in the substantive difference in the PS (easier to match for PS in the middle than at the two ends -- PS around 0 or 0.8 in this case).
+
+I originally used optimal matching to minimize overall distance, but after checking covariate balance (first table), there is still imbalance in variable age (SMD > 0.2). Therefore, I decided to use nearest neighbor matching without caliper. However, there is still some covariate imbalance. This makes sense because we saw in the PS histograms before that some subjects in the treated groups have quite high propensity scores compared to the rest. So I set caliper 0.4 to make sure the matched treated and controls are more similar based on their PS. Checking the SMDs<0.2 for all covariates helps confirm this matching strategy improves covariate balance.
+
+However, by setting caliper to 0.4, I have also excluded some treated units (35) who don't have a nearest-neighbor match within the acceptable distance 0.4. 
+
+Since we match 1:1, we can look at the same table comparing covariates between treatment and control arm. We see the SMD reduced compared to before. The histograms also show more alignment in the distribution of propensity score between the treated units and the matched controls compared to before matching (right vs. left). 
+
+## Question 6
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+#Q6 - use matches from Q5, estimate ACE of treatment among the treated (ATT) 
+#match ATT
+psmatch.att <- matchit(practicetype.bin ~ age + I(age^2) + race + insurance_type + location, 
+                    distance="logit", method = "nearest", caliper = 0.4,
+                    estimand = "ATT", discard = "control", data = x_new)
+psmatch.att.data <- match.data(psmatch.att) #Create matched data for analysis
+
+#estimate ATT
+psmatchate.mod <- svyglm(completed ~ practicetype.bin + age + I(age^2) + race + insurance_type + location, family = binomial, design = svydesign(~ 1, weights = ~ weights,data=psmatch.att.data))
+summary(psmatchate.mod)
+```
+
+From the regression output above, the point estimate for the average treatment effect on the treated (ATT) is 0.6393. The 95% CI for this point estimate is $\widehat{ATT} \pm 1.96\times SE = 0.6393 \pm 1.96\times 0.2139 = [0.22,1.059]$. The associated p-value is 0.00295 < 0.05, so we can reject Ho and conclude the ATT is statistically significant (effect different from 0).
+
+**Interpretation**
+
+The estimated average treatment effect in the treated (ATT) is 0.6393 > 0 (p-value < 0.05). In the context of the question, the estimated log odds ratio of completing vaccine regimen is 0.6393 among the treated compared to if they had not been treated. We are 95% confident that the true ATT (or the log odds ratio) lies between 0.22 and 1.059 (excluding null value 0). For this analytic sample, the treatment (attending ob-gyn clinic) has a causal effect on the completion of vaccine regimen among the treated (increase the chance of vaccine regimen completion on average).
+
+We might also want to note that some limitation of matching method applies here, specifically decreased efficiency (throwing away data) and decreased generalizability. Here by making sure all covariates achieve balance for higher internal validity, I traded unbiasedness with efficiency and power.
+
+## Question 7
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+#Q7- use NN match without replacement or calipers
+#ATT
+psmatch7.att <- matchit(practicetype.bin ~ age + I(age^2) + race + insurance_type + location, 
+                    distance="logit", method = "nearest", replace = FALSE, 
+                    estimand = "ATT", discard = "control", data = x_new)
+psmatch.att7.data = match.data(psmatch7.att) #create dataset
+
+#estimate ATT from model
+psmatch.att7.mod <- svyglm(completed ~ practicetype.bin + age + I(age^2) + race + insurance_type + location, 
+                           family = binomial, design = svydesign(~ 1, weights = ~ weights,data=psmatch.att7.data))
+summary(psmatch.att7.mod)
+
+#ATC
+psmatch7.atc <- matchit(practicetype.bin ~ age + I(age^2) + race + insurance_type + location, 
+                    distance="logit", method = "nearest", replace = FALSE, 
+                    estimand = "ATC", discard = "control", data = x_new)
+psmatch.atc7.data = match.data(psmatch7.atc) #create matched data 
+
+#estimate ATC from model
+psmatch.atc7.mod <- svyglm(completed ~ practicetype.bin + age + I(age^2) + race + insurance_type + location, 
+                           family = binomial, design = svydesign(~ 1, weights = ~ weights,data=psmatch.atc7.data))
+summary(psmatch.atc7.mod)
+
+#combine the estimates from ATC and ATT -- calculate manually
+ate = (-0.270119 + 0.739537)/2
+```
+
+We have $N_1$ = 274 matched treated when estimating ATT and $N_0$ 274 matched controls when estimating ATC, so $N = N_1 + N_0 = 548$
+
+Combining the ATC and ATT estimates, we have the ATE as 
+
+$$\widehat{ATE} = \widehat{ATT}\frac{N_1}{N} + \widehat{ATC}\frac{N_0}{N}$$
+
+$$=  0.739537(\frac{274}{548})-0.270119(\frac{274}{548}) = 0.234$$
+
+* Interpret: 
+
+The estimated ATT is 0.739 (>0): the estimated log odds ratio of completing the vaccine regimen is 0.739 among the treated (subpopulation) compared to if they had not been treated.
+
+The estimated ATC is -0.27 (<0): the estimated log odds ratio of completing the vaccine regimen is -0.27 among the controls (subpopulation) compared to if they had been treated.
+
+We have the estimated ATE of 0.23 (>0). Qualitatively, for this analytic sample, the treatment (practice type, specifically ob-gyn clinic) might have a causal effect on the completion of vaccine regimen. Having access to ob-gyn clinic might increase the chance of vaccine regimen completion on average. 
+
+However, 95% CI or p-value are necessary to draw further inference on the true effect (whether it is statistically significant).
+
+**Extra: use matchit code and specify the estimand to be ATE**
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+### AVERAGE TREATMENT EFFECT 
+set.seed(2020)
+psmatch_ate <- matchit(practicetype.bin ~ age + I(age^2) + race + insurance_type + location, 
+                       data = x_new,  distance = "logit", method = "full", estimand = "ATE")
+
+psmatchate.data <- match.data(psmatch_ate) %>% mutate(completed = as.factor(completed))
+psmatchate.mod <- svyglm(completed ~ practicetype.bin + age + I(age^2) + race + insurance_type + location,
+                         family = binomial, design = svydesign(~ 1, weights = ~ weights,data=psmatchate.data))
+summary(psmatchate.mod)
+```
+
+We see that the ATE estimates are close (small difference might be due to different matching methods used).
+
+## Appendix
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```

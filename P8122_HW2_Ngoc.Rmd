@@ -1,0 +1,188 @@
+---
+title: "Homework 2"
+author: "Ngoc Duong"
+date: "10/13/2020"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ri)
+library(tidyverse)
+library(perm)
+library(ggplot2)
+```
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+data = read_csv("light.csv")
+```
+
+1. Plot the outcome by treatment group
+
+We have outcome is body mass gain (from start to end of study), and three treatment groups -- darkness (DM), dim light (LD), and bright light (LL). 
+
+```{r echo = FALSE}
+ggplot(data, aes(x = Light, y = BMGain)) + geom_boxplot() + theme_bw()
+```
+
+Comments: Based on the boxplots, we can see some skewness in the LD (dim light) and LL (bright light) groups. The variability in outcome also seems to differ across groups. The median body mass gain in the LL group is the highest, while that of LD group is the lowest. In comparing DM (darkness) and LL treatment, we can see some noticeable difference in median body mass gain between the two groups.
+
+2. We want to compare the mice exposed to darkness to the mice exposed to bright light. We subsetted data to only consider these two groups:
+
+```{r echo = FALSE}
+#subset treatment LL (bright) and DM (dark) from data
+ll_dm = subset(data, Light %in% c("LL", "DM")) 
+ll_dm %>% arrange(Light) %>% knitr::kable()
+```
+
+We end up with a subset of the data with 19 observations (9 in the Bright light group and 10 in the Darkness group).
+
+3. Set up data with generic names
+
+The quantities needed to evaluate the causal effect of light at night on weight gain are: mice body mass gain -- BMGain, and Light (Darkness versus Bright light treatment). Here, we change the name of the outcome of interest -- BMGain -- to "Y_obs", treatment -- Light -- to "A", and the levels of Light such that "Bright Light" is 1, and "Darkness" is 0.
+
+```{r}
+ll_dm_gen = ll_dm %>% rename(Y_obs = BMGain, A = Light) %>% 
+  mutate(A = ifelse(A == "LL", 1, 0)) #relevel the treatment to 1 and 0 
+
+#make object for the two quantities needed to evaluate causal effect
+Y_obs = ll_dm_gen$Y_obs #outcome of interest (continuous variable)
+A = ll_dm_gen$A #treatment assignment (1 or 0)
+```
+
+4. Calculate the statistic $T_{obs}$ as the difference in means between two treatment groups:
+
+$$T_{obs} = \frac{\Sigma^n_{i=1}A_iY_{1i}}{N_1} - \frac{\Sigma^n_{i=1}A_iY_{0i}}{N_0} = 3.151$$
+
+```{r include = FALSE}
+t_obs = mean(Y_obs[A == 1]) - mean(Y_obs[A == 0])
+```
+
+5. There are 19 observations in the combinded dataset with two groups. We want to consider the number of possible ways to choose $N_1$ from the total $N$ (choose 9 from 19, or equivalently, choose 10 from 19). This adds up to 92378 different possibilities.
+
+Below are the first 10 possibilities (each column is a randomization scenario) 
+
+```{r echo = FALSE}
+#enumarate all these probabilies in a matrix Amat
+Amat = chooseMatrix(19, 9)
+#transpose so each column is a randomization scenario
+Amat = t(Amat)
+#show the first 10 randomization scenarios from all the possibilities
+Amat[,1:10]
+```
+
+6. The sharp null hypothesis of no individual difference is:
+
+$$H_0: \tau_i = Y_{1i} - Y_{0i} = 0$$ for all $i$
+
+In other words, there is no treatment effect on the outcome for each individual observation. 
+
+```{r include = FALSE}
+A_tilde = Amat[,1] #choose the first randomization scenario 
+t_stat = mean(Y_obs[A_tilde == 1]) - mean(Y_obs[A_tilde == 0]) #obtain the test statistic for this scenario, under Ho
+```
+
+The test statistic under one of these probabilities for A (the first one), under the sharp null hypothesis is `r round(t_stat,4)`
+
+7. Generate the exact randomization distribution for T, under the sharp null hypothesis of no difference
+
+```{r echo = FALSE}
+#create a vector of empty spots/placeholders for each statistic under each randomization scenario 
+rdist <- rep(NA, times = ncol(Amat)) 
+
+#run a for loop through each randomization scenario and calculate the corresponding test statistic, then  
+for (i in 1:ncol(Amat)) {
+  A_tilde <- Amat[, i]
+  rdist[i] <- mean(Y_obs[A_tilde == 1]) - mean(Y_obs[A_tilde == 0])
+}
+rdist[1:20]
+```
+
+Above are the first 20 values of T under the sharp null hypothesis. 
+
+8. Plot the distribution, and mark the observed test statistic
+
+```{r echo = FALSE}
+#p-value calculated as the proportion of statistics equal or more extreme than the observed statistic under all possible randomizations 
+pval <- mean(rdist >= t_obs)
+quant <- quantile(rdist,probs = 1-pval) #get the quantile in the distribution of this pval
+hist(rdist, xlab = "T", main = "The exact randomization distribution of T,\nunder the sharp null of no difference") #plot all statistics obtained from all randomizations 
+abline(v = quant,col="red") #create red line to show where the t_stat is
+```
+
+9. 
+
+```{r include = FALSE}
+#proportion of statistics equal or more extreme than the observed statistic under all possible randomizations 
+pval <- mean(rdist >= t_obs)
+pval
+```
+
+The exact p-value based on this distribution is `r round(pval,4)`.
+
+10. Our observed statistic appears to be quite extreme in terms of the empirical exact randomization distribution. This is confirmed by the exact p-value for the observed test statistic based on this distribution being < 0.05, so we can reject the sharp null hypothesis and conclude that there is an individual effect of treatment type (Bright Light versus Darkness) on body mass gain in mice. 
+
+## Appendix
+
+```{r eval = FALSE}
+#read in data 
+data = read_csv("light.csv")
+
+#Q1 -- visualization
+ggplot(data, aes(x = Light, y = BMGain)) + geom_boxplot() + theme_bw()
+
+#Q2 -- subset treatment LL (bright) and DM (dark) from data
+ll_dm = subset(data, Light %in% c("LL", "DM")) 
+ll_dm %>% arrange(Light) %>% knitr::kable()
+
+#Q3 -- make generic names for variables of interest 
+ll_dm_gen = ll_dm %>% rename(Y_obs = BMGain, A = Light) %>% 
+mutate(A = ifelse(A == "LL", 1, 0)) #relevel the treatment to 1 (LL) and 0 (DM) 
+
+#make object for the two quantities needed to evaluate causal effect
+Y_obs = ll_dm_gen$Y_obs #outcome of interest (continuous variable)
+A = ll_dm_gen$A #treatment assignment (1 or 0)
+
+#Q4 -- calculate observed statistic
+t_obs = mean(Y_obs[A == 1]) - mean(Y_obs[A == 0])
+
+#Q5 -- enumarate all these probabilies in a matrix Amat
+Amat = chooseMatrix(19, 9)
+#transpose so each column is a randomization scenario
+Amat = t(Amat)
+#show the first 10 randomization scenarios from all the possibilities
+Amat[,1:10]
+
+#Q6 -- calculate statistic under first possibility in Amat 
+A_tilde = Amat[,1] #choose the first randomization scenario 
+t_stat = mean(Y_obs[A_tilde == 1]) - mean(Y_obs[A_tilde == 0]) #obtain the test statistic for this scenario, under Ho
+t_stat
+
+#Q7 -- generate exact randomization distribution of statistic
+#create a vector of empty spots/placeholders for each statistic under each randomization scenario 
+rdist <- rep(NA, times = ncol(Amat)) 
+
+#run a for loop through each randomization scenario and calculate the corresponding test statistic, then  
+for (i in 1:ncol(Amat)) {
+  A_tilde <- Amat[, i]
+  rdist[i] <- mean(Y_obs[A_tilde == 1]) - mean(Y_obs[A_tilde == 0])
+}
+rdist[1:20]
+
+#Q8 -- visualize distribution
+#p-value calculated as the proportion of statistics equal or more extreme than the statistic under 
+#all possible randomizations 
+pval <- mean(rdist >= t_obs)
+quant <- quantile(rdist,probs = 1-pval) #get the quantile in the distribution of this pval
+hist(rdist, xlab = "T", main = "The exact randomization distribution of T,\nunder the sharp null of no difference") #plot all statistics obtained from all randomizations 
+abline(v = quant,col="red") #create red line to show where the t_stat is
+
+#Q9 -- calculate exact p-value
+#proportion of statistics equal or more extreme than the observed statistic under all possible randomizations 
+pval <- mean(rdist >= t_obs)
+pval
+```
+
+

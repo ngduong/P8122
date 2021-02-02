@@ -1,0 +1,116 @@
+---
+title: "Homework 1"
+author: "Ngoc Duong"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+```
+
+### Question 1
+
+a) The effect of treatment on the outcome for each individual is calculated as the difference between the two counterfactuals: outcome if the individual was given the treatment and outcome if the individual was not given the treatment.
+
+The formula is: $Y_1(\omega) - Y_0(\omega)$ where $\omega = 1,2,..., 8$
+```{r echo = FALSE}
+tibble(individual = 1:8, Y0 = c(0,1,0,1,1,0,1,0), Y1 = c(0,0,1,0,0,1,0,0), 'Y1-Y0' = Y1-Y0) %>% knitr::kable()
+```
+
+**Interpretation**
+
+Assuming Y = 1 is a desriable outcome, a = 1 is having treatment, a = 0 is not having treatment then:
+
+For individuals 1 and 8, the treatment has no causal effect on the outcome.
+
+For individuals 2 to 7, the treatment has a causal effect on the outcome (beneficial causal effect for individuals 3 and 6, and harmful causal effect for individuals 2, 4, 5, 7).
+
+b) The average causal effect of treatment on the outcome is defined as:
+
+$$ACE = E[Y_{1}] - E[Y_{0}]$$
+In the table above, we saw that 2 individuals have the good outcome if everyone is given the treatment, and 4 individuals have the good outcome if everyone is not given the treatment.
+
+Therefore, we have $$ACE = E[Y_{1}] - E[Y_{0}] = \frac{2}{8} - \frac{4}{8} = -\frac{1}{4} = -0.25$$
+
+**Interpretation**
+
+Since $E[Y_1 = 1] < E[Y_0 = 1]$ (ACE < 0), the treatment has a causal effect on the outcome Y, and having treatment is worse than not having treatment on average.
+
+c) We have the new table from the given treatment assignments
+```{r echo = FALSE, results = 'asis'}
+tibble(individual = 1:8, Y0 = c("?",1,"?","?",1,0,1,"?"), Y1 = c(0,"?",1,0,"?","?","?",0), A = c(1,0,1,1,0,0,0,1)) %>% knitr::kable(format = "latex", booktabs = T)
+```
+
+Since there are 4 people assigned to receive the treatment (one among whom has the good outcome), and 4 people assigned to not get the treatment (three among whom have the good outcome), the association of the treatment with the outcome under this treatment assignment is:
+
+$$E[Y|A=1] - E[Y|A=0] = \frac{1}{4} - \frac{3}{4} = -0.5$$
+
+**Interpretation**
+
+Since $E[Y|A=1] < E[Y|A=0]$, the treatment and outcome are (negatively) associated.
+
+The people who have the treatment fare worse than those who do not have the treatment (these two groups are separate), and the associational risk difference is -0.5.
+
+The apparent effect is larger than the average causal effect found in question 1b (-0.5 versus -0.25).
+
+d) I make a random assignment by creating a random variable A where A follows $binom(8,0.5)$. The assignments are then simulated by R (chosen seed 8).
+
+```{r echo = FALSE}
+set.seed(8)
+tibble(Individual = 1:8, Y0 = c(0,1,"?","?",1,"?",1,"?"), Y1 = c("?","?",1,0,"?",1,"?",0), A = rbinom(8, 1, 1/2)) %>% knitr::kable()
+```
+
+Since there are 4 people assigned to get treatment (two of whom have the outcome Y=1), and 4 people assigned to not get treatment (three of whom have the outcome Y=1), the association of the treatment with the outcome under this treatment assignment is:
+
+$$E[Y|A=1] - E[Y|A=0] = \frac{2}{4} - \frac{3}{4} = -0.25$$
+
+Under this assignment, the difference in observed group means is -0.25, which equals the average causal effect found in 1b. This also suggests the treatment is negatively associated with the outcome. From c and d, we can see there is some variability in the associational risk difference depending on how the random assignment is made (possible reason is healthier individuals maybe randomized to not receive the treatment or vice versa). This is a limitation of only observing the outcome of the treatment assigned (instead of observing both counterfactuals).
+
+### Question 2
+
+a) The units are the patient at different visits.
+
+b) The treatment is medication (prescribed at low or high dose)
+
+c) The potential outcomes are normal blood pressure and non-normal blood pressure.
+
+d) Let the unit be 1 for the first visit and 2 for the second visit.
+
+Let Y = 1 be the desired outcome (perfect blood pressure) and Y = 0 be non-normal blood pressure.
+
+Let low-dose medication be A = 1 and high-dose medication be A = 0. Then we have the table:
+
+```{r echo = FALSE}
+tibble(Unit = c(1,2), Y1 = c("?", 1), Y0 = c(0, "?"), A = c(0, 1)) %>% knitr::kable()
+```
+
+The doctor only had the observed data, so the associational risk difference (apparent effect) he obtained is:
+
+$$E[Y | A = 1] - E[Y | A = 0] = \frac{1}{1} - \frac{0}{1} = 1$$
+
+The doctor might think of this effect as the (unbiased estimator of) causal effect, therefore, he concluded treatment 1 (low dose) is better. However, without certain assumptions being satisfied, causal effect $\neq$ associational effect, so this "causal effect" (from the doctor's perspective) might not be credible. 
+
+e) Assuming that there is ambiguity in the carry-over effect of the drug, both assumptions of SUTVA are not plausible.
+
+The first assumption is the intervention is well-defined or there is only one version of the potential outcome. Here, the intervention does not seem to be well-defined, since the intervention could have been the low dose medication that brought about the perfect blood pressure, or the low dose medication on top of the continuing effect of the high dose medication. 
+
+The second assumption is that the person's outcome is not influenced by another person's treatment. This is also violated because here if there is carry-over effect of the high-dose medication from the first unit (visit), the outcome of the low-dose medication in the second unit (visit) might be affected.
+
+If we assume that there is no carry-over effect of the medication, which means the blood pressure restores to its original level before treatment, then both assumptions can be met. For the first assumption, the intervention is well-defined as being just the low-dose medication. For the second assumption, since the medication's effect does not carry over, the patient's high dose medication for first unit (visit) does not affect the outcome of the low-dose treatment in the second unit (visit).
+
+f) If SUTVA is not satisfied, we cannot use the potential outcome framework because the potential outcomes are not uniquely defined. As a result, the definition of and how we calculate causal effect can vary, and any estimator from the observed data might be biased.
+
+g) Probabilistic: this may not be satisfied. Since if the level of pre-treatment blood pressure is high, then the probability of the high-dose medication treatment is 0 (the patient can only take low-dose medication).
+
+Individualistic: not satisfied, since the assignment mechanism here seems to be more of a sequential/adaptive nature -- the treatment assignment for a unit depends on the outcome and assignment for other (previous) unit.
+
+Unconfounded: this may not be satisfied, because treatment seems to be based on the  outcome conditional on the covariate pre-treatment blood pressure. Plus, there might be unmeasured covariates that are associated with the outcome and the assignment.
+
+Controlled: not satisfied because the assignment mechanism does not seem to have been determined apriori.
+
+h) We can try to remedy the violations above. We can introduce a random and controlled component to the treatment assignment scheme. For the first visit, the doctor can record the initial blood pressure, assign either low-dose or high-dose medication with some probability, and at the second visit there will be a cross-over to the other treatment. However, the doctor must stick to this assignment independent of the patient's outcome. For potential confounders, we might ask the patient to maintain consistent diet, exercise, sleeping habits, etc. during the first and second treatment. We can also introduce a "cleanse period" in the between in case there is carry-over effect from the medication. The observed difference between the first treatment (pre-crossover) and second treatment (post-crossover) can estimate the causal effect of treatment. 
+
+
+

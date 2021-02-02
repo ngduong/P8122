@@ -1,0 +1,342 @@
+---
+title: "Homework 3"
+author: "Ngoc Duong"
+date: "11/22/2020"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(dagitty)
+library(ggdag)
+library(personalized)
+library(tableone)
+```
+
+## Question 1
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+#import data
+data = read_csv("hW3 data.csv") %>% 
+  mutate(treat = as.factor(treat),
+         black = as.factor(black),
+         hispan = as.factor(hispan),
+         married = as.factor(married),
+         nodegree = as.factor(nodegree)) %>% select(-X1)
+```
+
+**1.1. Write the DAG** 
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+tidy_ggdag = dagify(
+  re78 ~ treat + age + educ + degree + married + hispan + black + re74 + re75,
+  treat ~ re74 + age + educ + degree + married + hispan + black,
+  re75 ~ re74,
+  #re74 ~ age + educ + degree + married + hispan + black,
+  degree ~ educ,
+  exposure = "treat",
+  outcome = "re78"
+) %>% tidy_dagitty(layout = "circle")
+
+ggdag(tidy_ggdag) + theme_dag()
+```
+
+**Describe the variables**
+
+We have the main outcome of income in the year 1978, and the main exposure as an indicator of job training (in the year 1974). We expect there is a causal relationship between additional job training in 1974 and income in 1978. 
+
+A couple other income variables are re74 (income in the year 1974) and re75 (income in the year 1975). For re74, we expect this to be associated with both job training and income in 1978. This is because incomes over the year tend to be intercorrelated (depending on profession, skills), and income in 1974 might affect whether an individual seek job training, for example to improve earning prospects in later year for people in lower income range. For re75 -- income in 1975, temporally, this was measured after the job training has been implemented in 1974. Therefore, we can expect this to be on the causal pathway between "treatment" (job training) and "outcome" (re78).
+
+We have some demographic variables such as: age (age in years), educ (years of education), married (married indicator), nodegree (high school degree completion indicator), black (indicator of being African-American/black), hispan (indicator of being Hispanic). These variables can reasonably affect the outcome (income in year 1978) as many studies have documented links between race, age, certification, and family commitment and earning potential. Additionally, education years might also be associated with high school degree status. But it is not fully mediated by high school degree status because it might serve as proxy for other unmeasured confounders such as knowledge, skills, experience, social capital, etc. which all affected income not completly through degree/certification.
+
+**1.2. Evaluate covariate balance**
+
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+covar.balance = CreateTableOne(vars = c("age", "educ","black", "hispan", "married", "nodegree", "re74", "re75"), strata = "treat",
+                               data = data, test = FALSE)
+#print table and select to show standardized mean differences
+print(covar.balance, smd = TRUE) 
+```
+
+**Interpret**
+
+The table above can give us a sense of the distribution of covariates across the levels of treatment. Specifically, in treatment group 0, there are 429 subjects and in treatment group 1, there are 185 subjects. The summary statistics (mean and SD for continuous variables, and count and proportion for discrete variables) were reported for each of the covariate in each treatment stratum. The standardized mean difference (SMD) computed from two treatment groups can be viewed as a measure for difference/imbalance. 
+
+Ideally, we would want the SMD to be close to 0 (sometimes the cut-off <0.2 or < 0.25 is used), but here we can see that except for education (in years) and age (in years), other variables all have larger SMD than desired, which suggests some covariate imbalance. 
+
+For example, the mean age of the no-job-training group is 28.03 years (SD = 10.79 years) and the mean age of the job-training group is 25.82 years (SD = 7.16 years). The SMD is 0.242 > 0.2, which might indicate slight imbalance.
+
+The goal of propensity score matching/subclassification is to reduce the SMD within each subclass.
+
+**1.3 Construct propensity scores**
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+#fit propensity score model
+ps.model = glm(treat ~ age + educ + black + hispan + married + nodegree + re74,
+               data=data, family = binomial)
+summary(ps.model)
+
+#Calculate propensity score and assign it to variable "ps"
+data$ps <- predict(ps.model, type="response") #gets the propensity scores for each unit, based on the model
+```
+
+I fitted a logistic regression with the outcome being the treatment status, and covariates being potential confounders that were identified in the DAG in part 1. I did not include re75, because given the temporal relationship between the variables, this information does not help explain the treatment -- job training status in 1974, and so is also not a confounder for "re78" and "treat".
+
+**1.4. Evaluate overlap and trim data if necessary**
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+prop.func <- function(x, trt)
+{propens.model = glm(treat ~ age + educ + black + hispan + married + nodegree + re74, data=data, family = binomial) # fit propensity score model
+  data$ps <- predict(propens.model, type = "response")
+  data$ps}
+
+check.overlap(x = data,
+              trt = data$treat,
+              type = "both",
+              propensity.func = prop.func)
+```
+
+From the Densities and histograms for propensity scores above, we can see that there are the extreme upper portion of the treatment 1 group that have no overlap with the treatment group 0. This means for these subjects in treatment group 1, we have no information about the similar subjects in treatment group 0 to recover the counterfactuals. Therefore, in order to ensure exposure assignment in random in all "blocks", we need to trim data. 
+
+In the trimming process, we can eliminate the treated subjects whose P(A=1|C) is greater that the maximum P(A=1|C) found in the untreated group, and similarly, eliminate the untreated subjects whose P(A=0|C) is lower than the minimum P(A=0|C) found in the the treated group.
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+attach(data)
+#max(ps[data$treat==0]) #min(P(A=1|C)) 
+#min(ps[data$treat==1])
+
+data.t1 = data[ps <= max(ps[data$treat==0]) & ps >= min(ps[data$treat == 1]),] 
+dim(data)
+dim(data.t1)
+```
+
+Here, applying the above rule, I trimmed `r dim(data)[1]-dim(data.t1)[1]` subjects.
+
+Once we have trimmed the data, we can obtain better covariate balance. However, given a highly unbalanced sample, trimming can result in small observartions at some intersection(s) of levels of covariates. Due to lowered sample size, this might lead to lower power and generalizability is also reduced. The collapsing of covariates into one score may account for potential confounders that are unmeasured, which might improve statistical efficiency.
+
+**1.5. Evaluate imbalance in trimmed sample**
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+vars = c("age", "educ","black", "hispan", "married", "nodegree", "re74", "re75")
+covar.balance.t1 = CreateTableOne(vars = vars, strata = "treat",
+                               data = data.t1, test = FALSE)
+#print table and select to show standardized mean differences
+print(covar.balance.t1, smd = TRUE)
+```
+
+We can see that the SMDs seem to be lower than before, which is what we desire with trimming. Now, we have age, education years, high school degree status are relatively balanced. However, black, hispan, and married variables still have relatively high SMDs. Notice that the sample size also decreases after we left out subjects with non-overlapping extreme propensitiy scores.
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+#refit propensity score on trimmed data
+propens.model = glm(treat ~ age + educ + black + hispan + married + nodegree + re74, 
+                    data=data.t1, family = binomial)
+data.t1$ps <- predict(propens.model, type = "response") #obtain propensity scores from new PS model
+
+data.t2 = data.t1
+```
+
+
+**1.6. Use subclassification to balance covariates between treated and controls**
+
+* Process: I started out with the quintiles 0.2, 0.4, 0.6, 0.8. However, the first quintiles contains too few observations in the treated group (less than 5), which might make the subjects not exactly exchangeable within this subclass. So I combined the first two bins and chose 0.4 as the cut-off quantile for the first subclass, keeping 0.6 and 0.8 the same as by looking at the propensity score histogram and densities, these seem to be close enough.
+
+The breaks the associated propensity scores are as follows:
+
+```{r echo= FALSE, message = FALSE, warning = FALSE}
+attach(data.t2)
+subclass.breaks = quantile(ps, c(0.4, 0.6, 0.8)) #0.4, 0.65
+subclass.breaks
+subclass = data.t2$ps
+subclass = as.numeric(data.t2$ps>subclass.breaks[1])
+subclass[which(data.t2$ps>subclass.breaks[1] & data.t2$ps<=subclass.breaks[2])]<- 1
+subclass[which(data.t2$ps>subclass.breaks[2] & data.t2$ps<=subclass.breaks[3])]<- 2
+subclass[which(data.t2$ps>subclass.breaks[3])]<- 3
+```
+
+Below is the sample sizes within each subclass
+
+```{r echo = FALSE}
+#looking at sample sizes within each subclass
+table(data.t2$treat, subclass)
+```
+
+Below is the densities and histograms of propensity scores by treatment group for these 4 subclasses
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+#looking at propensity scores within subclasses
+prop.func <- function(x, trt)
+{data.t2$ps[which(data.t2$ps <= subclass.breaks[1])]}
+check.overlap(x = data.t2[which(data.t2$ps <=subclass.breaks[1]),],
+              trt = data.t2$treat[which(data.t2$ps <= subclass.breaks[1])],
+              type = "both",
+              propensity.func = prop.func)
+
+
+prop.func <- function(x, trt)
+{data.t2$ps[which(data.t2$ps>subclass.breaks[1] & data.t2$ps<=subclass.breaks[2])]}
+check.overlap(x = data.t2[which(data.t2$ps>subclass.breaks[1]&data.t2$ps<=subclass.breaks[2]),],
+              trt = data.t2$treat[which(data.t2$ps>subclass.breaks[1]&data.t2$ps<=subclass.breaks[2])],
+              type = "both",
+              propensity.func = prop.func)
+
+
+prop.func <- function(x, trt)
+{data.t2$ps[which(data.t2$ps>subclass.breaks[2] & data.t2$ps<=subclass.breaks[3])]}
+check.overlap(x = data.t2[which(data.t2$ps>subclass.breaks[2]&data.t2$ps<=subclass.breaks[3]),],
+              trt = data.t2$treat[which(data.t2$ps>subclass.breaks[2]&data.t2$ps<=subclass.breaks[3])],
+              type = "both",
+              propensity.func = prop.func)
+
+prop.func <- function(x, trt)
+{data.t2$ps[which(data.t2$ps>subclass.breaks[3])]}
+check.overlap(x = data.t2[which(data.t2$ps>subclass.breaks[3]),],
+              trt = data.t2$treat[which(data.t2$ps>subclass.breaks[3])],
+              type = "both",
+              propensity.func = prop.func)
+```
+
+* Inspect covariate balance in each subclass. 
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+tab_s0 <- CreateTableOne(vars = vars, strata = "treat", data = data.t2[which(subclass==0),], test = FALSE)
+tab_s1 <- CreateTableOne(vars = vars, strata = "treat", data = data.t2[which(subclass==1),], test = FALSE)
+tab_s2 <- CreateTableOne(vars = vars, strata = "treat", data = data.t2[which(subclass==2),], test = FALSE)
+tab_s3 <- CreateTableOne(vars = vars, strata = "treat", data = data.t2[which(subclass==3),], test = FALSE)
+
+## Show table with SMD
+print(tab_s0, smd = TRUE)
+print(tab_s1, smd = TRUE)
+print(tab_s2, smd = TRUE)
+print(tab_s3, smd = TRUE)
+```
+
+We can see that subclasses 3 and 4 have better covariate balance, with many SMDs below 0.2. Covariates in the other two subclasses have reduced SMDs from the original data but some variables still have not reached the desired cutoff. More trimming or subclassification bins might be selected to obtain better covariate balance.
+
+**1.7. Estimate marginal average causal effect of treatment on wages using 4 subclasses above** 
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+ACE0 <- mean(data.t2$re78[which(subclass==0 & data.t2$treat==1)])-mean(data.t2$re78[which(subclass==0 & data.t2$treat==0)])
+ACE1 <- mean(data.t2$re78[which(subclass==1 & data.t2$treat==1)])-mean(data.t2$re78[which(subclass==1 & data.t2$treat==0)])
+ACE2 <- mean(data.t2$re78[which(subclass==2 & data.t2$treat==1)])-mean(data.t2$re78[which(subclass==2 & data.t2$treat==0)])
+ACE3 <- mean(data.t2$re78[which(subclass==2 & data.t2$treat==1)])-mean(data.t2$re78[which(subclass==2 & data.t2$treat==0)])
+
+ace <- (nrow(data.t2[which(subclass==0),])/nrow(data.t2))*ACE0+ (nrow(data.t2[which(subclass==1),])/nrow(data.t2))*ACE1+ (nrow(data.t2[which(subclass==2),])/nrow(data.t2))*ACE2+ 
+(nrow(data.t2[which(subclass==3),])/nrow(data.t2))*ACE3
+
+v01 <- var(data.t2$re78[which(subclass==0 & data.t2$treat==1)])
+v00 <- var(data.t2$re78[which(subclass==0 & data.t2$treat==0)])
+
+v11 <- var(data.t2$re78[which(subclass==1 & data.t2$treat==1)])
+v10 <- var(data.t2$re78[which(subclass==1 & data.t2$treat==0)])
+
+v21 <- var(data.t2$re78[which(subclass==2 & data.t2$treat==1)])
+v20 <- var(data.t2$re78[which(subclass==2 & data.t2$treat==0)])
+
+v31 <- var(data.t2$re78[which(subclass==3 & data.t2$treat==1)])
+v30 <- var(data.t2$re78[which(subclass==3 & data.t2$treat==0)])
+
+
+n0 <- nrow(data[which(subclass==0),])
+n1 <- nrow(data[which(subclass==1),])
+n2 <- nrow(data[which(subclass==2),])
+n3 <- nrow(data[which(subclass==3),])
+                                                       
+n01 <- nrow(data.t2[which(subclass==0& data.t2$treat==1),])
+n11 <- nrow(data.t2[which(subclass==1& data.t2$treat==1),])
+n21 <- nrow(data.t2[which(subclass==2& data.t2$treat==1),])
+n31 <- nrow(data.t2[which(subclass==3& data.t2$treat==1),])
+n00 <- nrow(data.t2[which(subclass==0& data.t2$treat==0),])
+n10 <- nrow(data.t2[which(subclass==1& data.t2$treat==0),])
+n20 <- nrow(data.t2[which(subclass==2& data.t2$treat==0),])
+n30 <- nrow(data.t2[which(subclass==3& data.t2$treat==0),])
+                                            
+varace <-(n1)^2/nrow(data)^2*((v11/n11)+(v10/n10))+ (n2)^2/nrow(data)^2*((v21/n21)+(v20/n20))+  (n0)^2/nrow(data)^2*((v01/n01)+(v00/n00)) + (n3)^2/nrow(data)^2*((v31/n31)+(v30/n30))
+
+sdace<-sqrt(varace)
+
+CIL=ace-sdace*2
+CIU=ace+sdace*2
+
+#p-value
+pval = pnorm((ace/sdace), lower.tail = FALSE)
+```
+
+The point estimate of the marginal causal effect of job training participation on wages is `r round(ace,3)`. The associated p-value is `r pval`.
+
+The 95%CI for this point estimate is (`r round(CIL,3)`, `r round(CIU,3)`)
+
+* Interpretations:
+
+On average, the estimated marginal causal effect of having job training in 1974 on income in 1978 is `r round(ace,3)` dollars. However, job training in 1974 may not increase the income in 1978 as the estimated ACE on the difference scale is between `r round(CIL,3)` and `r round(CIU,3)`, which includes the null value of 0. Equivalently, p-value > 0.05 suggests the same conclusion.
+
+**1.8. Using direct adjustment of confounders**
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+reg.mod = lm(re78~treat + age + educ + black + hispan + married + nodegree + re74, data = data)
+summary(reg.mod)
+
+#95%CI for average treatment effect
+confint(reg.mod)[2,]
+```
+
+When fitting the regression model, I used the original data. The estimated effect of job training on income in 1978 is `r round(summary(reg.mod)$coeff[2],3)`, and the 95%CI is `r round(confint(reg.mod)[2,],3)`
+
+* Interpretations:
+
+On average, job training in 1974 is associated with an expected `r round(summary(reg.mod)$coeff[2],3)`-dollar increase in income in 1978, adjusting for covariates such as income in 1974, age, race, marital status, and education. We are 95% confident that the true causal effect lies between `r round(summary(reg.mod)$coeff[2],3)`. Since the 95% CI does not include 0, we can conclude that job training is significantly associated with income in 1978, based on the direct adjustment model.
+
+* Comparison:
+
+The estimated ACE using direct adjusting of confounder is higher than the estimated ACE obatained from the propensity score subclasses. The directions of both estimates are similar (positive) which indicate some positive effect of the treatment. However, the estimated ACE of the treatment is the direct adjustment model is statistically significant at 0.05 significance level, whereas the 95%CI and p-value obtained from the subclassification approach indicate otherwise. 
+
+**1.9. Discussion**
+
+Subclassification approach
+
+* Advantages: subclasses are created to mimic blocks in block randomization, such that the propensity of receiving treatment are similar within each subclass and independent of the outcome,
+
+* Disadvantages: searching for the optimal subclasses can be arbitrary/difficult, underpowered due to the process of trimming/reduced sample size.
+
+Direct adjustment of confounding approach
+
+* Advantages: straightfoward, we can easily include covariates that we want to adjust for in the regression model; more powerful since we can reserve the original sample size.
+
+* Disadvantages: including many confounders might result in some intersection of confounders levels not having any observations/too few observations; plus, there is a potential of missing other (unmeasured) confounders, which the propensity score might be able to capture.
+
+## Question 2
+
+**2.1. Write non-parametric structural equations for the DAGs**
+
+1. $Y = f_Y(A, L, \epsilon_Y), A = f_A(L, \epsilon_A), L = f_L(\epsilon_L)$
+
+2. $Y = f_Y(A, U, \epsilon_Y), A = f_A(L, \epsilon_A), L = f_L(U, \epsilon_L), U = f_U(\epsilon_U)$
+
+3. $Y = f_Y(U, \epsilon_Y), A = f_A(\epsilon_A), L = f_L(A, U, \epsilon_L), U = f_U(\epsilon_U)$
+
+4. $Y = f_Y(A, L, \epsilon_Y), A = f_A(U, \epsilon_A), L = f_L(U, \epsilon_L), U = f_U(\epsilon_U)$
+
+5. $Y = f_Y(A, U_1, \epsilon_Y), A = f_A(U_2, \epsilon_A), L = f_L(U_1, U_2, \epsilon_L), U_1 = f_{U_1}(\epsilon_{U_1}), U_2 = f_{U_2}(\epsilon_{U_2})$
+
+**2.2. Does conditioning on L properly adjust for confounding?**
+
+1. There is a backdoor path from A to Y (A - L - Y), so L is a confounder here. Conditioning on L means blocking the backdoor path which adjusts for confounding in this DAG.
+
+2. Here, we can see that there is an arrow going from U to both A and Y (although the path is mediated by L from U to A). Regardless, there is a backdoor path from A to Y through U (A - L - U - Y), thus U is a confounder, and conditioning on U will adjust for confounding. However, since U is unmeasured, and L fully mediates the path from U to A, we can also block the backdoor path by conditioning on L.
+
+3. We can see that there is no arrow going from A to Y, thus there is no confounding between A and Y. Since there is no backdoor path that suggests L or U is a confounder, conditioning L (or U) does not adjust for confounding. 
+
+4. Similarly to 2, we see there is an arrow going from U to A and Y, and we can have the backdoor path going from A to Y through L (A - U - L - Y). Blocking L will block this backdoor path, and so conditioning on L adjusts for confounding.  
+
+5. This DAG shows no common cause between A and Y, so there is no confounding betwen A and Y. We cannot have the backdoor path from A to Y through L, or rather, it is blocked by L being a collider on that path. Therefore, conditioning on L does not adjusting for confounding.
+
+## Appendix
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```
+
+
